@@ -1,0 +1,35 @@
+{
+  "name": "@superqueues/sdk",
+  "version": "0.1.0",
+  "description": "JavaScript SDK for SuperQueues gateway - HTTP and WebSocket support",
+  "main": "index.js",
+  "type": "commonjs",
+  "license": "MIT",
+  "keywords": [
+    "queue",
+    "rabbitmq",
+    "message-queue",
+    "sdk",
+    "superqueues"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-org/superqueues"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "files": [
+    "index.js",
+    "lib/**/*.js",
+    "README.md"
+  ],
+  "dependencies": {},
+  "optionalDependencies": {
+    "ws": "^8.16.0"
+  },
+  "devDependencies": {},
+  "scripts": {
+    "test": "echo \"No tests yet\" && exit 0"
+  }
+}
