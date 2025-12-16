@@ -57,6 +57,24 @@ router.post('/admin/settings',
   admin.updateSettings
 );
 
+router.get('/admin/audit/storage',
+  requireAuth('admin'),
+  trackApiKeyUsage('admin.getAuditStorage', 'admin'),
+  admin.getAuditStorage
+);
+
+router.post('/admin/audit/clear',
+  requireAuth('admin'),
+  trackApiKeyUsage('admin.clearAuditLogs', 'admin'),
+  admin.clearAuditLogs
+);
+
+router.get('/admin/system/totals',
+  requireAuth('admin'),
+  trackApiKeyUsage('admin.getSystemTotals', 'admin'),
+  admin.getSystemTotals
+);
+
 router.get('/admin/api-keys',
   requireAuth('admin'),
   trackApiKeyUsage('admin.listApiKeys', 'admin'),

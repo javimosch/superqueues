@@ -670,17 +670,59 @@
       <div v-if="tab === 'settings'" class="space-y-4">
         <div class="card bg-base-100 shadow-xl">
           <div class="card-body">
-            <h2 class="card-title">Audit Mode</h2>
-            <p class="text-sm text-gray-500">Control how much job history is recorded. Reduce for high-throughput scenarios.</p>
-            <div class="form-control w-full max-w-xs">
-              <select v-model="settings.auditMode" class="select select-bordered" @change="updateSettings">
-                <option value="full">Full (jobs + events)</option>
-                <option value="jobs_only">Jobs Only (no events)</option>
-                <option value="off">Off (no history)</option>
-              </select>
+            <h2 class="card-title">Job Audit</h2>
+            <p class="text-sm text-gray-500">Controls how much job history is recorded (jobs + job events).</p>
+
+            <div class="flex flex-wrap gap-4 items-end">
+              <div class="form-control w-full max-w-xs">
+                <label class="label"><span class="label-text text-xs">Job audit mode</span></label>
+                <select v-model="settings.auditMode" class="select select-bordered" @change="updateSettings">
+                  <option value="full">Full (jobs + events)</option>
+                  <option value="jobs_only">Jobs Only (no events)</option>
+                  <option value="off">Off (no history)</option>
+                </select>
+              </div>
+
+              <div class="form-control">
+                <label class="label"><span class="label-text text-xs">Job audit storage</span></label>
+                <div class="badge badge-outline">
+                  {{ formatBytes(auditStorage?.jobAudit?.totalBytes?.total || 0) }}
+                </div>
+              </div>
+
+              <button class="btn btn-sm" @click="loadAuditStorage">Refresh usage</button>
+
+              <button class="btn btn-sm btn-error" @click="clearJobAudit">Clear job audit logs</button>
             </div>
-            <div class="mt-4">
+
+            <div class="mt-3">
               <div class="badge" :class="auditModeBadge">Current: {{ settings.auditMode }}</div>
+              <div class="text-xs text-gray-500 mt-2">
+                Clearing job audit deletes `jobs` and `job events` data in MongoDB.
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card bg-base-100 shadow-xl">
+          <div class="card-body">
+            <h2 class="card-title">API Key Usage Audit</h2>
+            <p class="text-sm text-gray-500">Request-level audit trail for queue operations and admin actions. Retention is enforced by TTL (1 year).</p>
+
+            <div class="flex flex-wrap gap-4 items-end">
+              <div class="form-control">
+                <label class="label"><span class="label-text text-xs">API key usage storage</span></label>
+                <div class="badge badge-outline">
+                  {{ formatBytes(auditStorage?.apiKeyUsageAudit?.totalBytes?.total || 0) }}
+                </div>
+              </div>
+
+              <button class="btn btn-sm" @click="loadAuditStorage">Refresh usage</button>
+              <button class="btn btn-sm btn-error" @click="clearApiKeyUsageAudit">Clear API key usage audit</button>
+            </div>
+
+            <div class="text-xs text-gray-500 mt-2">
+              Clearing API key usage audit deletes all API key usage events.
             </div>
           </div>
         </div>
@@ -701,6 +743,35 @@
                 <div class="stat-title">Broker Queues</div>
                 <div class="stat-value">{{ brokerQueues.length }}</div>
               </div>
+            </div>
+
+            <div class="divider">MongoDB</div>
+
+            <div class="stats shadow">
+              <div class="stat">
+                <div class="stat-title">Jobs</div>
+                <div class="stat-value">{{ systemTotals?.jobs ?? '-' }}</div>
+              </div>
+              <div class="stat">
+                <div class="stat-title">Job Events</div>
+                <div class="stat-value">{{ systemTotals?.jobEvents ?? '-' }}</div>
+              </div>
+              <div class="stat">
+                <div class="stat-title">API Key Usage Events</div>
+                <div class="stat-value">{{ systemTotals?.apiKeyUsageEvents ?? '-' }}</div>
+              </div>
+              <div class="stat">
+                <div class="stat-title">API Keys</div>
+                <div class="stat-value">{{ systemTotals?.apiKeys ?? '-' }}</div>
+              </div>
+              <div class="stat">
+                <div class="stat-title">Settings</div>
+                <div class="stat-value">{{ systemTotals?.settings ?? '-' }}</div>
+              </div>
+            </div>
+
+            <div class="mt-3">
+              <button class="btn btn-sm" @click="loadSystemTotals">Refresh totals</button>
             </div>
           </div>
         </div>
@@ -852,6 +923,10 @@
         const auditNextCursor = ref(null);
         const auditSummary = ref(null);
 
+        const auditStorage = ref(null);
+
+        const systemTotals = ref(null);
+
         const saveApiKey = () => {
           localStorage.setItem('sq_api_key', apiKey.value);
           testConnection();
@@ -890,6 +965,8 @@
           loadMergedQueues();
           loadApiKeys();
           loadSettings();
+          loadAuditStorage();
+          loadSystemTotals();
         };
 
         const loadQueues = async () => {
@@ -965,6 +1042,47 @@
           try {
             const data = await api('GET', '/admin/settings');
             settings.value = data;
+          } catch (e) {
+            showToast(e.message, 'error');
+          }
+        };
+
+        const loadAuditStorage = async () => {
+          try {
+            const data = await api('GET', '/admin/audit/storage');
+            auditStorage.value = data;
+          } catch (e) {
+            showToast(e.message, 'error');
+          }
+        };
+
+        const loadSystemTotals = async () => {
+          try {
+            const data = await api('GET', '/admin/system/totals');
+            systemTotals.value = data.totals;
+          } catch (e) {
+            showToast(e.message, 'error');
+          }
+        };
+
+        const clearJobAudit = async () => {
+          if (!confirm('Clear ALL job audit logs (jobs + job events)?')) return;
+          try {
+            await api('POST', '/admin/audit/clear', { target: 'jobs' });
+            showToast('Job audit logs cleared');
+            loadAuditStorage();
+            loadMergedQueues();
+          } catch (e) {
+            showToast(e.message, 'error');
+          }
+        };
+
+        const clearApiKeyUsageAudit = async () => {
+          if (!confirm('Clear ALL API key usage audit events?')) return;
+          try {
+            await api('POST', '/admin/audit/clear', { target: 'api_key_usage' });
+            showToast('API key usage audit cleared');
+            loadAuditStorage();
           } catch (e) {
             showToast(e.message, 'error');
           }
@@ -1214,6 +1332,8 @@
           auditKeys, auditKeyId, auditFrom, auditTo, auditAction, auditStatus,
           auditEvents, auditNextCursor, auditSummary,
           loadAuditKeys, loadAuditUsage, loadMoreAuditEvents, loadAuditSummary,
+          auditStorage, loadAuditStorage, clearJobAudit, clearApiKeyUsageAudit,
+          systemTotals, loadSystemTotals,
           formatDate, formatBytes, formatUptime, statusBadge, auditModeBadge,
         };
       },

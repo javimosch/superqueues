@@ -1,5 +1,6 @@
 const crypto = require('crypto');
-const { ApiKey, ApiKeyUsageEvent, Job } = require('../models');
+const mongoose = require('mongoose');
+const { ApiKey, ApiKeyUsageEvent, Job, JobEvent, Settings } = require('../models');
 const { audit, rabbitmq, queue: queueService, broker } = require('../services');
 const { hashKey } = require('../middleware/auth');
 
@@ -7,6 +8,117 @@ async function getSettings(req, res, next) {
   try {
     const auditMode = await audit.getAuditMode();
     res.json({ auditMode });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function getSystemTotals(req, res, next) {
+  try {
+    const [apiKeys, settings, jobs, jobEvents, apiKeyUsageEvents] = await Promise.all([
+      ApiKey.countDocuments({}),
+      Settings.countDocuments({}),
+      Job.countDocuments({}),
+      JobEvent.countDocuments({}),
+      ApiKeyUsageEvent.countDocuments({}),
+    ]);
+
+    res.json({
+      totals: {
+        apiKeys,
+        settings,
+        jobs,
+        jobEvents,
+        apiKeyUsageEvents,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function getAuditStorage(req, res, next) {
+  try {
+    async function getCollectionStats(model) {
+      const name = model.collection.name;
+      const stats = await mongoose.connection.db.command({ collStats: name });
+      return {
+        name,
+        count: stats.count,
+        size: stats.size,
+        storageSize: stats.storageSize,
+        totalIndexSize: stats.totalIndexSize,
+      };
+    }
+
+    const [jobStats, jobEventStats, apiKeyUsageStats] = await Promise.all([
+      getCollectionStats(Job),
+      getCollectionStats(JobEvent),
+      getCollectionStats(ApiKeyUsageEvent),
+    ]);
+
+    function sumStats(collections) {
+      const totals = collections.reduce((acc, c) => {
+        acc.count += c.count || 0;
+        acc.size += c.size || 0;
+        acc.storageSize += c.storageSize || 0;
+        acc.totalIndexSize += c.totalIndexSize || 0;
+        return acc;
+      }, { count: 0, size: 0, storageSize: 0, totalIndexSize: 0 });
+
+      return {
+        collections,
+        totals,
+        totalBytes: {
+          data: totals.size,
+          storage: totals.storageSize,
+          indexes: totals.totalIndexSize,
+          total: totals.storageSize + totals.totalIndexSize,
+        },
+      };
+    }
+
+    const jobAudit = sumStats([jobStats, jobEventStats]);
+    const apiKeyUsageAudit = sumStats([apiKeyUsageStats]);
+
+    res.json({
+      jobAudit,
+      apiKeyUsageAudit,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function clearAuditLogs(req, res, next) {
+  try {
+    const { target } = req.body || {};
+    const normalized = target || 'all';
+
+    const result = {
+      target: normalized,
+      deleted: {
+        jobs: 0,
+        jobEvents: 0,
+        apiKeyUsageEvents: 0,
+      },
+    };
+
+    if (normalized === 'jobs' || normalized === 'all') {
+      const [jobsRes, jobEventsRes] = await Promise.all([
+        Job.deleteMany({}),
+        JobEvent.deleteMany({}),
+      ]);
+      result.deleted.jobs = jobsRes.deletedCount || 0;
+      result.deleted.jobEvents = jobEventsRes.deletedCount || 0;
+    }
+
+    if (normalized === 'api_key_usage' || normalized === 'all') {
+      const resDel = await ApiKeyUsageEvent.deleteMany({});
+      result.deleted.apiKeyUsageEvents = resDel.deletedCount || 0;
+    }
+
+    res.json(result);
   } catch (err) {
     next(err);
   }
@@ -520,6 +632,9 @@ module.exports = {
   deleteApiKey,
   getApiKeyUsage,
   getApiKeyUsageSummary,
+  getAuditStorage,
+  clearAuditLogs,
+  getSystemTotals,
   listQueues,
   getQueueMessages,
   publishTestMessage,
