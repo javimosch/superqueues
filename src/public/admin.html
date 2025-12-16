@@ -44,6 +44,10 @@
             <span class="label-text text-xs">Show broker stats</span>
             <input type="checkbox" v-model="showBrokerColumns" class="checkbox checkbox-xs">
           </label>
+          <label class="label cursor-pointer gap-2">
+            <span class="label-text text-xs">Hide Rabbit native queues</span>
+            <input type="checkbox" v-model="hideRabbitNativeQueues" class="checkbox checkbox-xs">
+          </label>
         </div>
 
         <div class="overflow-x-auto">
@@ -64,7 +68,7 @@
               </tr>
             </thead>
             <tbody>
-              <tr v-for="q in mergedQueues" :key="q.name">
+              <tr v-for="q in mergedQueuesFiltered" :key="q.name">
                 <td class="font-mono text-xs">{{ q.name }}</td>
                 <td v-if="showBrokerColumns">
                   <span v-if="q.broker" class="badge badge-sm badge-outline badge-info">{{ q.broker.messagesReady }}</span>
@@ -89,7 +93,7 @@
                   <button class="btn btn-xs btn-warning" @click="viewDlq(q.name)" v-if="q.jobs?.dlq > 0">DLQ</button>
                 </td>
               </tr>
-              <tr v-if="mergedQueues.length === 0">
+              <tr v-if="mergedQueuesFiltered.length === 0">
                 <td :colspan="showBrokerColumns ? 11 : 8" class="text-center text-gray-500">No queues found</td>
               </tr>
             </tbody>
@@ -913,6 +917,26 @@
 
         const newQueueName = ref('');
 
+        const hideRabbitNativeQueues = ref(
+          (localStorage.getItem('sq_hide_rabbit_native_queues') ?? 'true') === 'true'
+        );
+
+        const mergedQueuesFiltered = computed(() => {
+          const hide = !!hideRabbitNativeQueues.value;
+          if (!hide) return mergedQueues.value || [];
+          return (mergedQueues.value || []).filter(q => {
+            const name = q?.name || '';
+            if (name === 'amq.rabbitmq.reply-to') return false;
+            if (name.startsWith('amq.')) return false;
+            if (name.startsWith('default.')) return false;
+            return true;
+          });
+        });
+
+        watch(hideRabbitNativeQueues, (val) => {
+          localStorage.setItem('sq_hide_rabbit_native_queues', val ? 'true' : 'false');
+        });
+
         const auditKeys = ref([]);
         const auditKeyId = ref('');
         const auditFrom = ref('');
@@ -1324,6 +1348,7 @@
           showPublishModal, publishForm,
           showCreateKeyModal, newKeyForm, createdKeyRaw,
           newQueueName,
+          hideRabbitNativeQueues, mergedQueuesFiltered,
           saveApiKey, loadQueues, loadMergedQueues, loadBroker, loadApiKeys, updateSettings,
           prevBrokerPage, nextBrokerPage,
           viewQueue, viewDlq, loadQueueMessages,
