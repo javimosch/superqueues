@@ -101,4 +101,34 @@ router.post('/admin/queues/:queue/consumer',
   admin.startQueueConsumer
 );
 
+router.get('/admin/broker/overview',
+  requireAuth('admin'),
+  admin.getBrokerOverview
+);
+
+router.get('/admin/broker/queues',
+  requireAuth('admin'),
+  admin.getBrokerQueues
+);
+
+router.get('/admin/broker/queues/:queue',
+  requireAuth('admin'),
+  admin.getBrokerQueue
+);
+
+router.get('/admin/broker/connections',
+  requireAuth('admin'),
+  admin.getBrokerConnections
+);
+
+router.get('/admin/broker/nodes',
+  requireAuth('admin'),
+  admin.getBrokerNodes
+);
+
+router.get('/admin/queues/merged',
+  requireAuth('admin'),
+  admin.getMergedQueues
+);
+
 module.exports = router;

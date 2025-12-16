@@ -1,6 +1,6 @@
 const crypto = require('crypto');
 const { ApiKey, Job } = require('../models');
-const { audit, rabbitmq, queue: queueService } = require('../services');
+const { audit, rabbitmq, queue: queueService, broker } = require('../services');
 const { hashKey } = require('../middleware/auth');
 
 async function getSettings(req, res, next) {
@@ -245,6 +245,120 @@ async function startQueueConsumer(req, res, next) {
   }
 }
 
+async function getBrokerOverview(req, res, next) {
+  try {
+    const overview = await broker.getOverview();
+    res.json(overview);
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function getBrokerQueues(req, res, next) {
+  try {
+    const { name, vhost } = req.query;
+    const queues = await broker.getQueues({ name, vhost });
+    res.json({ queues });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function getBrokerQueue(req, res, next) {
+  try {
+    const { queue } = req.params;
+    const { vhost = '/' } = req.query;
+    const queueInfo = await broker.getQueue(vhost, queue);
+    res.json(queueInfo);
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function getBrokerConnections(req, res, next) {
+  try {
+    const connections = await broker.getConnections();
+    res.json({ connections });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function getBrokerNodes(req, res, next) {
+  try {
+    const nodes = await broker.getNodes();
+    res.json({ nodes });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function getMergedQueues(req, res, next) {
+  try {
+    const [brokerQueues, jobStats] = await Promise.all([
+      broker.getQueues().catch(() => []),
+      Job.aggregate([
+        {
+          $group: {
+            _id: '$queue',
+            total: { $sum: 1 },
+            queued: { $sum: { $cond: [{ $eq: ['$status', 'queued'] }, 1, 0] } },
+            delivered: { $sum: { $cond: [{ $eq: ['$status', 'delivered'] }, 1, 0] } },
+            acked: { $sum: { $cond: [{ $eq: ['$status', 'acked'] }, 1, 0] } },
+            failed: { $sum: { $cond: [{ $eq: ['$status', 'failed'] }, 1, 0] } },
+            dlq: { $sum: { $cond: [{ $eq: ['$status', 'dlq'] }, 1, 0] } },
+            lastActivity: { $max: '$updatedAt' },
+          },
+        },
+      ]),
+    ]);
+
+    const jobStatsMap = new Map(jobStats.map(s => [s._id, s]));
+    const brokerQueueMap = new Map(brokerQueues.map(q => [q.name, q]));
+
+    const allQueueNames = new Set([
+      ...brokerQueues.map(q => q.name),
+      ...jobStats.map(s => s._id),
+    ]);
+
+    const queues = Array.from(allQueueNames).map(name => {
+      const brokerQ = brokerQueueMap.get(name) || null;
+      const jobS = jobStatsMap.get(name) || null;
+
+      return {
+        name,
+        broker: brokerQ ? {
+          messages: brokerQ.messages,
+          messagesReady: brokerQ.messagesReady,
+          messagesUnacked: brokerQ.messagesUnacked,
+          consumers: brokerQ.consumers,
+          state: brokerQ.state,
+          messageStats: brokerQ.messageStats,
+        } : null,
+        jobs: jobS ? {
+          total: jobS.total,
+          queued: jobS.queued,
+          delivered: jobS.delivered,
+          acked: jobS.acked,
+          failed: jobS.failed,
+          dlq: jobS.dlq,
+          lastActivity: jobS.lastActivity,
+        } : null,
+      };
+    });
+
+    queues.sort((a, b) => {
+      const aTime = a.jobs?.lastActivity || new Date(0);
+      const bTime = b.jobs?.lastActivity || new Date(0);
+      return new Date(bTime) - new Date(aTime);
+    });
+
+    res.json({ queues });
+  } catch (err) {
+    next(err);
+  }
+}
+
 module.exports = {
   getSettings,
   updateSettings,
@@ -258,4 +372,10 @@ module.exports = {
   requeueFromDlq,
   purgeQueue,
   startQueueConsumer,
+  getBrokerOverview,
+  getBrokerQueues,
+  getBrokerQueue,
+  getBrokerConnections,
+  getBrokerNodes,
+  getMergedQueues,
 };

@@ -27,25 +27,33 @@
     <div class="container mx-auto p-4">
       <div class="tabs tabs-boxed mb-4">
         <a class="tab" :class="{ 'tab-active': tab === 'queues' }" @click="tab = 'queues'">Queues</a>
+        <a class="tab" :class="{ 'tab-active': tab === 'broker' }" @click="tab = 'broker'; loadBroker()">Broker</a>
         <a class="tab" :class="{ 'tab-active': tab === 'api-keys' }" @click="tab = 'api-keys'">API Keys</a>
         <a class="tab" :class="{ 'tab-active': tab === 'settings' }" @click="tab = 'settings'">Settings</a>
       </div>
 
       <!-- Queues Tab -->
       <div v-if="tab === 'queues'" class="space-y-4">
-        <div class="flex gap-2 items-center">
-          <button class="btn btn-primary btn-sm" @click="loadQueues">Refresh</button>
+        <div class="flex gap-2 items-center flex-wrap">
+          <button class="btn btn-primary btn-sm" @click="loadMergedQueues">Refresh</button>
           <button class="btn btn-secondary btn-sm" @click="showPublishModal = true">Publish Test Message</button>
           <input v-model="newQueueName" placeholder="New queue name" class="input input-bordered input-sm w-64">
           <button class="btn btn-accent btn-sm" @click="startConsumer" :disabled="!newQueueName">Start Consumer</button>
+          <label class="label cursor-pointer gap-2">
+            <span class="label-text text-xs">Show broker stats</span>
+            <input type="checkbox" v-model="showBrokerColumns" class="checkbox checkbox-xs">
+          </label>
         </div>
 
         <div class="overflow-x-auto">
-          <table class="table table-zebra w-full">
+          <table class="table table-zebra w-full table-sm">
             <thead>
               <tr>
                 <th>Queue</th>
-                <th>Total</th>
+                <th v-if="showBrokerColumns" class="text-cyan-400">Ready</th>
+                <th v-if="showBrokerColumns" class="text-cyan-400">Unacked</th>
+                <th v-if="showBrokerColumns" class="text-cyan-400">Consumers</th>
+                <th>Jobs Total</th>
                 <th>Queued</th>
                 <th>Delivered</th>
                 <th>Acked</th>
@@ -55,21 +63,33 @@
               </tr>
             </thead>
             <tbody>
-              <tr v-for="q in queues" :key="q.name">
-                <td class="font-mono">{{ q.name }}</td>
-                <td>{{ q.stats.total }}</td>
-                <td><span class="badge badge-info">{{ q.stats.queued }}</span></td>
-                <td><span class="badge badge-warning">{{ q.stats.delivered }}</span></td>
-                <td><span class="badge badge-success">{{ q.stats.acked }}</span></td>
-                <td><span class="badge badge-error">{{ q.stats.dlq }}</span></td>
-                <td>{{ formatDate(q.lastActivity) }}</td>
+              <tr v-for="q in mergedQueues" :key="q.name">
+                <td class="font-mono text-xs">{{ q.name }}</td>
+                <td v-if="showBrokerColumns">
+                  <span v-if="q.broker" class="badge badge-sm badge-outline badge-info">{{ q.broker.messagesReady }}</span>
+                  <span v-else class="text-gray-500">-</span>
+                </td>
+                <td v-if="showBrokerColumns">
+                  <span v-if="q.broker" class="badge badge-sm badge-outline badge-warning">{{ q.broker.messagesUnacked }}</span>
+                  <span v-else class="text-gray-500">-</span>
+                </td>
+                <td v-if="showBrokerColumns">
+                  <span v-if="q.broker" class="badge badge-sm badge-outline">{{ q.broker.consumers }}</span>
+                  <span v-else class="text-gray-500">-</span>
+                </td>
+                <td>{{ q.jobs?.total || 0 }}</td>
+                <td><span class="badge badge-sm badge-info">{{ q.jobs?.queued || 0 }}</span></td>
+                <td><span class="badge badge-sm badge-warning">{{ q.jobs?.delivered || 0 }}</span></td>
+                <td><span class="badge badge-sm badge-success">{{ q.jobs?.acked || 0 }}</span></td>
+                <td><span class="badge badge-sm badge-error">{{ q.jobs?.dlq || 0 }}</span></td>
+                <td class="text-xs">{{ formatDate(q.jobs?.lastActivity) }}</td>
                 <td class="space-x-1">
                   <button class="btn btn-xs btn-info" @click="viewQueue(q.name)">View</button>
-                  <button class="btn btn-xs btn-warning" @click="viewDlq(q.name)" v-if="q.stats.dlq > 0">DLQ</button>
+                  <button class="btn btn-xs btn-warning" @click="viewDlq(q.name)" v-if="q.jobs?.dlq > 0">DLQ</button>
                 </td>
               </tr>
-              <tr v-if="queues.length === 0">
-                <td colspan="8" class="text-center text-gray-500">No queues found</td>
+              <tr v-if="mergedQueues.length === 0">
+                <td :colspan="showBrokerColumns ? 11 : 8" class="text-center text-gray-500">No queues found</td>
               </tr>
             </tbody>
           </table>
@@ -251,6 +271,180 @@
         </div>
       </div>
 
+      <!-- Broker Tab -->
+      <div v-if="tab === 'broker'" class="space-y-4">
+        <div class="flex gap-2 items-center">
+          <button class="btn btn-primary btn-sm" @click="loadBroker">Refresh</button>
+          <div class="badge" :class="brokerConnected ? 'badge-success' : 'badge-error'">
+            {{ brokerConnected ? 'Broker Connected' : 'Broker Unreachable' }}
+          </div>
+        </div>
+
+        <div v-if="brokerOverview" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div class="card bg-base-100 shadow-xl">
+            <div class="card-body p-4">
+              <h3 class="text-sm text-gray-400">Cluster</h3>
+              <p class="font-mono text-lg">{{ brokerOverview.clusterName }}</p>
+              <p class="text-xs text-gray-500">RabbitMQ {{ brokerOverview.rabbitmqVersion }}</p>
+            </div>
+          </div>
+          <div class="card bg-base-100 shadow-xl">
+            <div class="card-body p-4">
+              <h3 class="text-sm text-gray-400">Messages</h3>
+              <div class="stats stats-vertical">
+                <div class="stat p-1">
+                  <div class="stat-title text-xs">Ready</div>
+                  <div class="stat-value text-lg text-info">{{ brokerOverview.queueTotals.messagesReady }}</div>
+                </div>
+                <div class="stat p-1">
+                  <div class="stat-title text-xs">Unacked</div>
+                  <div class="stat-value text-lg text-warning">{{ brokerOverview.queueTotals.messagesUnacked }}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="card bg-base-100 shadow-xl">
+            <div class="card-body p-4">
+              <h3 class="text-sm text-gray-400">Rates (msg/s)</h3>
+              <div class="stats stats-vertical">
+                <div class="stat p-1">
+                  <div class="stat-title text-xs">Publish</div>
+                  <div class="stat-value text-lg">{{ brokerOverview.messageStats.publishRate.toFixed(1) }}</div>
+                </div>
+                <div class="stat p-1">
+                  <div class="stat-title text-xs">Deliver</div>
+                  <div class="stat-value text-lg">{{ brokerOverview.messageStats.deliverRate.toFixed(1) }}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="card bg-base-100 shadow-xl">
+            <div class="card-body p-4">
+              <h3 class="text-sm text-gray-400">Objects</h3>
+              <div class="grid grid-cols-2 gap-2 text-center">
+                <div>
+                  <div class="text-2xl font-bold">{{ brokerOverview.queues }}</div>
+                  <div class="text-xs text-gray-500">Queues</div>
+                </div>
+                <div>
+                  <div class="text-2xl font-bold">{{ brokerOverview.consumers }}</div>
+                  <div class="text-xs text-gray-500">Consumers</div>
+                </div>
+                <div>
+                  <div class="text-2xl font-bold">{{ brokerOverview.connections }}</div>
+                  <div class="text-xs text-gray-500">Connections</div>
+                </div>
+                <div>
+                  <div class="text-2xl font-bold">{{ brokerOverview.channels }}</div>
+                  <div class="text-xs text-gray-500">Channels</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card bg-base-100 shadow-xl">
+          <div class="card-body">
+            <h2 class="card-title">Broker Queues</h2>
+            <div class="overflow-x-auto">
+              <table class="table table-zebra table-sm w-full">
+                <thead>
+                  <tr>
+                    <th>Queue</th>
+                    <th>State</th>
+                    <th>Ready</th>
+                    <th>Unacked</th>
+                    <th>Total</th>
+                    <th>Consumers</th>
+                    <th>Publish/s</th>
+                    <th>Deliver/s</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="q in brokerQueues" :key="q.name">
+                    <td class="font-mono text-xs">{{ q.name }}</td>
+                    <td>
+                      <span class="badge badge-xs" :class="q.state === 'running' ? 'badge-success' : 'badge-warning'">{{ q.state }}</span>
+                    </td>
+                    <td><span class="badge badge-sm badge-info">{{ q.messagesReady }}</span></td>
+                    <td><span class="badge badge-sm badge-warning">{{ q.messagesUnacked }}</span></td>
+                    <td>{{ q.messages }}</td>
+                    <td>{{ q.consumers }}</td>
+                    <td>{{ q.messageStats.publishRate.toFixed(1) }}</td>
+                    <td>{{ q.messageStats.deliverRate.toFixed(1) }}</td>
+                  </tr>
+                  <tr v-if="brokerQueues.length === 0">
+                    <td colspan="8" class="text-center text-gray-500">No queues in broker</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div class="card bg-base-100 shadow-xl">
+            <div class="card-body">
+              <h2 class="card-title">Connections</h2>
+              <div class="overflow-x-auto max-h-64">
+                <table class="table table-xs w-full">
+                  <thead>
+                    <tr>
+                      <th>User</th>
+                      <th>Vhost</th>
+                      <th>Channels</th>
+                      <th>State</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="c in brokerConnections" :key="c.name">
+                      <td>{{ c.user }}</td>
+                      <td>{{ c.vhost }}</td>
+                      <td>{{ c.channels }}</td>
+                      <td>
+                        <span class="badge badge-xs" :class="c.state === 'running' ? 'badge-success' : 'badge-warning'">{{ c.state }}</span>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div class="card bg-base-100 shadow-xl">
+            <div class="card-body">
+              <h2 class="card-title">Nodes</h2>
+              <div class="overflow-x-auto max-h-64">
+                <table class="table table-xs w-full">
+                  <thead>
+                    <tr>
+                      <th>Name</th>
+                      <th>Memory</th>
+                      <th>Disk</th>
+                      <th>Running</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="n in brokerNodes" :key="n.name">
+                      <td class="font-mono text-xs">{{ n.name.split('@')[1] || n.name }}</td>
+                      <td>
+                        <span :class="n.memAlarm ? 'text-error' : ''">{{ formatBytes(n.memUsed) }}</span>
+                      </td>
+                      <td>
+                        <span :class="n.diskFreeAlarm ? 'text-error' : ''">{{ formatBytes(n.diskFree) }}</span>
+                      </td>
+                      <td>
+                        <span class="badge badge-xs" :class="n.running ? 'badge-success' : 'badge-error'">{{ n.running ? 'Yes' : 'No' }}</span>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- Settings Tab -->
       <div v-if="tab === 'settings'" class="space-y-4">
         <div class="card bg-base-100 shadow-xl">
@@ -276,11 +470,15 @@
             <div class="stats shadow">
               <div class="stat">
                 <div class="stat-title">Total Queues</div>
-                <div class="stat-value">{{ queues.length }}</div>
+                <div class="stat-value">{{ mergedQueues.length }}</div>
               </div>
               <div class="stat">
                 <div class="stat-title">Total API Keys</div>
                 <div class="stat-value">{{ apiKeys.length }}</div>
+              </div>
+              <div class="stat">
+                <div class="stat-title">Broker Queues</div>
+                <div class="stat-value">{{ brokerQueues.length }}</div>
               </div>
             </div>
           </div>
@@ -307,8 +505,16 @@
         const toast = ref({ show: false, message: '', type: 'success' });
 
         const queues = ref([]);
+        const mergedQueues = ref([]);
         const apiKeys = ref([]);
         const settings = ref({ auditMode: 'full' });
+        const showBrokerColumns = ref(true);
+
+        const brokerConnected = ref(false);
+        const brokerOverview = ref(null);
+        const brokerQueues = ref([]);
+        const brokerConnections = ref([]);
+        const brokerNodes = ref([]);
 
         const selectedQueue = ref(null);
         const queueMessages = ref([]);
@@ -360,7 +566,7 @@
         };
 
         const loadAll = () => {
-          loadQueues();
+          loadMergedQueues();
           loadApiKeys();
           loadSettings();
         };
@@ -372,6 +578,42 @@
           } catch (e) {
             showToast(e.message, 'error');
           }
+        };
+
+        const loadMergedQueues = async () => {
+          try {
+            const data = await api('GET', '/admin/queues/merged');
+            mergedQueues.value = data.queues;
+          } catch (e) {
+            showToast(e.message, 'error');
+          }
+        };
+
+        const loadBroker = async () => {
+          try {
+            const [overview, queuesData, connections, nodes] = await Promise.all([
+              api('GET', '/admin/broker/overview').catch(() => null),
+              api('GET', '/admin/broker/queues').catch(() => ({ queues: [] })),
+              api('GET', '/admin/broker/connections').catch(() => ({ connections: [] })),
+              api('GET', '/admin/broker/nodes').catch(() => ({ nodes: [] })),
+            ]);
+            brokerOverview.value = overview;
+            brokerQueues.value = queuesData.queues || [];
+            brokerConnections.value = connections.connections || [];
+            brokerNodes.value = nodes.nodes || [];
+            brokerConnected.value = !!overview;
+          } catch (e) {
+            brokerConnected.value = false;
+            showToast(e.message, 'error');
+          }
+        };
+
+        const formatBytes = (bytes) => {
+          if (!bytes) return '0 B';
+          const k = 1024;
+          const sizes = ['B', 'KB', 'MB', 'GB'];
+          const i = Math.floor(Math.log(bytes) / Math.log(k));
+          return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
         };
 
         const loadApiKeys = async () => {
@@ -559,16 +801,17 @@
 
         return {
           apiKey, connected, tab, toast,
-          queues, apiKeys, settings,
+          queues, mergedQueues, apiKeys, settings, showBrokerColumns,
+          brokerConnected, brokerOverview, brokerQueues, brokerConnections, brokerNodes,
           selectedQueue, queueMessages, messageFilter, viewingDlq, selectedJobs,
           showPublishModal, publishForm,
           showCreateKeyModal, newKeyForm, createdKeyRaw,
           newQueueName,
-          saveApiKey, loadQueues, loadApiKeys, updateSettings,
+          saveApiKey, loadQueues, loadMergedQueues, loadBroker, loadApiKeys, updateSettings,
           viewQueue, viewDlq, loadQueueMessages,
           publishMessage, requeueSelected, purgeQueue, startConsumer, toggleAllJobs,
           createApiKey, toggleKeyEnabled, deleteKey, copyKey,
-          formatDate, statusBadge, auditModeBadge,
+          formatDate, formatBytes, statusBadge, auditModeBadge,
         };
       },
     }).mount('#app');

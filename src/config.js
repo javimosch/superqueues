@@ -4,6 +4,9 @@ const config = {
   rabbitmq: {
     url: process.env.RABBITMQ_URL || 'amqp://localhost:5672',
     prefetchDefault: parseInt(process.env.PREFETCH_DEFAULT || '10', 10),
+    managementUrl: process.env.RABBITMQ_MANAGEMENT_URL || 'http://localhost:15672',
+    managementUser: process.env.RABBITMQ_MANAGEMENT_USER || 'guest',
+    managementPassword: process.env.RABBITMQ_MANAGEMENT_PASSWORD || 'guest',
   },
   
   mongo: {
