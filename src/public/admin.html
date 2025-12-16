@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SuperQueues Admin</title>
+  <link href="https://cdn.jsdelivr.net/npm/daisyui@4.4.19/dist/full.min.css" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+</head>
+<body class="min-h-screen bg-base-200">
+  <div id="app">
+    <div class="navbar bg-base-100 shadow-lg">
+      <div class="flex-1">
+        <a class="btn btn-ghost text-xl">🐰 SuperQueues</a>
+      </div>
+      <div class="flex-none gap-2">
+        <div class="form-control">
+          <input v-model="apiKey" type="password" placeholder="API Key" class="input input-bordered w-64" @change="saveApiKey">
+        </div>
+        <div class="badge" :class="connected ? 'badge-success' : 'badge-error'">
+          {{ connected ? 'Connected' : 'Not Connected' }}
+        </div>
+      </div>
+    </div>
+
+    <div class="container mx-auto p-4">
+      <div class="tabs tabs-boxed mb-4">
+        <a class="tab" :class="{ 'tab-active': tab === 'queues' }" @click="tab = 'queues'">Queues</a>
+        <a class="tab" :class="{ 'tab-active': tab === 'api-keys' }" @click="tab = 'api-keys'">API Keys</a>
+        <a class="tab" :class="{ 'tab-active': tab === 'settings' }" @click="tab = 'settings'">Settings</a>
+      </div>
+
+      <!-- Queues Tab -->
+      <div v-if="tab === 'queues'" class="space-y-4">
+        <div class="flex gap-2 items-center">
+          <button class="btn btn-primary btn-sm" @click="loadQueues">Refresh</button>
+          <button class="btn btn-secondary btn-sm" @click="showPublishModal = true">Publish Test Message</button>
+          <input v-model="newQueueName" placeholder="New queue name" class="input input-bordered input-sm w-64">
+          <button class="btn btn-accent btn-sm" @click="startConsumer" :disabled="!newQueueName">Start Consumer</button>
+        </div>
+
+        <div class="overflow-x-auto">
+          <table class="table table-zebra w-full">
+            <thead>
+              <tr>
+                <th>Queue</th>
+                <th>Total</th>
+                <th>Queued</th>
+                <th>Delivered</th>
+                <th>Acked</th>
+                <th>DLQ</th>
+                <th>Last Activity</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="q in queues" :key="q.name">
+                <td class="font-mono">{{ q.name }}</td>
+                <td>{{ q.stats.total }}</td>
+                <td><span class="badge badge-info">{{ q.stats.queued }}</span></td>
+                <td><span class="badge badge-warning">{{ q.stats.delivered }}</span></td>
+                <td><span class="badge badge-success">{{ q.stats.acked }}</span></td>
+                <td><span class="badge badge-error">{{ q.stats.dlq }}</span></td>
+                <td>{{ formatDate(q.lastActivity) }}</td>
+                <td class="space-x-1">
+                  <button class="btn btn-xs btn-info" @click="viewQueue(q.name)">View</button>
+                  <button class="btn btn-xs btn-warning" @click="viewDlq(q.name)" v-if="q.stats.dlq > 0">DLQ</button>
+                </td>
+              </tr>
+              <tr v-if="queues.length === 0">
+                <td colspan="8" class="text-center text-gray-500">No queues found</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Queue Detail Modal -->
+        <div class="modal" :class="{ 'modal-open': selectedQueue }">
+          <div class="modal-box max-w-4xl">
+            <h3 class="font-bold text-lg">{{ selectedQueue }} - {{ viewingDlq ? 'DLQ' : 'Messages' }}</h3>
+            <div class="py-4">
+              <div class="flex gap-2 mb-4">
+                <select v-model="messageFilter" class="select select-bordered select-sm" @change="loadQueueMessages">
+                  <option value="">All Statuses</option>
+                  <option value="queued">Queued</option>
+                  <option value="delivered">Delivered</option>
+                  <option value="acked">Acked</option>
+                  <option value="dlq">DLQ</option>
+                </select>
+                <button class="btn btn-sm btn-primary" @click="loadQueueMessages">Refresh</button>
+                <button v-if="viewingDlq && selectedJobs.length > 0" class="btn btn-sm btn-success" @click="requeueSelected">
+                  Requeue Selected ({{ selectedJobs.length }})
+                </button>
+                <button v-if="viewingDlq" class="btn btn-sm btn-error" @click="purgeQueue">Purge DLQ</button>
+              </div>
+              <div class="overflow-x-auto max-h-96">
+                <table class="table table-xs w-full">
+                  <thead>
+                    <tr>
+                      <th v-if="viewingDlq"><input type="checkbox" class="checkbox checkbox-sm" @change="toggleAllJobs"></th>
+                      <th>Job ID</th>
+                      <th>Status</th>
+                      <th>Attempts</th>
+                      <th>Payload</th>
+                      <th>Error</th>
+                      <th>Updated</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="job in queueMessages" :key="job.jobId">
+                      <td v-if="viewingDlq">
+                        <input type="checkbox" class="checkbox checkbox-sm" :value="job.jobId" v-model="selectedJobs">
+                      </td>
+                      <td class="font-mono text-xs">{{ job.jobId.slice(0, 8) }}...</td>
+                      <td><span class="badge badge-sm" :class="statusBadge(job.status)">{{ job.status }}</span></td>
+                      <td>{{ job.attempts }}</td>
+                      <td class="max-w-xs truncate font-mono text-xs">{{ JSON.stringify(job.payload) }}</td>
+                      <td class="max-w-xs truncate text-error text-xs">{{ job.lastError }}</td>
+                      <td class="text-xs">{{ formatDate(job.updatedAt) }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div class="modal-action">
+              <button class="btn" @click="selectedQueue = null">Close</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Publish Modal -->
+        <div class="modal" :class="{ 'modal-open': showPublishModal }">
+          <div class="modal-box">
+            <h3 class="font-bold text-lg">Publish Test Message</h3>
+            <div class="py-4 space-y-4">
+              <div class="form-control">
+                <label class="label"><span class="label-text">Queue Name</span></label>
+                <input v-model="publishForm.queue" class="input input-bordered" placeholder="orders.created">
+              </div>
+              <div class="form-control">
+                <label class="label"><span class="label-text">Payload (JSON)</span></label>
+                <textarea v-model="publishForm.payload" class="textarea textarea-bordered h-32 font-mono" placeholder='{"key": "value"}'></textarea>
+              </div>
+              <div class="form-control">
+                <label class="label"><span class="label-text">Correlation ID (optional)</span></label>
+                <input v-model="publishForm.correlationId" class="input input-bordered" placeholder="correlation-123">
+              </div>
+            </div>
+            <div class="modal-action">
+              <button class="btn btn-ghost" @click="showPublishModal = false">Cancel</button>
+              <button class="btn btn-primary" @click="publishMessage">Publish</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- API Keys Tab -->
+      <div v-if="tab === 'api-keys'" class="space-y-4">
+        <button class="btn btn-primary btn-sm" @click="showCreateKeyModal = true">Create API Key</button>
+
+        <div class="overflow-x-auto">
+          <table class="table table-zebra w-full">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Scopes</th>
+                <th>Allowed Queues</th>
+                <th>Enabled</th>
+                <th>Last Used</th>
+                <th>Created</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="key in apiKeys" :key="key._id">
+                <td>{{ key.name }}</td>
+                <td>
+                  <span v-for="scope in key.scopes" :key="scope" class="badge badge-sm mr-1">{{ scope }}</span>
+                </td>
+                <td class="font-mono text-sm">{{ key.allowedQueues.join(', ') }}</td>
+                <td>
+                  <input type="checkbox" class="toggle toggle-success" :checked="key.enabled" @change="toggleKeyEnabled(key)">
+                </td>
+                <td>{{ key.lastUsedAt ? formatDate(key.lastUsedAt) : 'Never' }}</td>
+                <td>{{ formatDate(key.createdAt) }}</td>
+                <td>
+                  <button class="btn btn-xs btn-error" @click="deleteKey(key)">Delete</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Create Key Modal -->
+        <div class="modal" :class="{ 'modal-open': showCreateKeyModal }">
+          <div class="modal-box">
+            <h3 class="font-bold text-lg">Create API Key</h3>
+            <div class="py-4 space-y-4">
+              <div class="form-control">
+                <label class="label"><span class="label-text">Name</span></label>
+                <input v-model="newKeyForm.name" class="input input-bordered" placeholder="my-service">
+              </div>
+              <div class="form-control">
+                <label class="label"><span class="label-text">Scopes</span></label>
+                <div class="flex gap-4">
+                  <label class="cursor-pointer label">
+                    <input type="checkbox" v-model="newKeyForm.scopes" value="publish" class="checkbox">
+                    <span class="label-text ml-2">publish</span>
+                  </label>
+                  <label class="cursor-pointer label">
+                    <input type="checkbox" v-model="newKeyForm.scopes" value="consume" class="checkbox">
+                    <span class="label-text ml-2">consume</span>
+                  </label>
+                  <label class="cursor-pointer label">
+                    <input type="checkbox" v-model="newKeyForm.scopes" value="admin" class="checkbox">
+                    <span class="label-text ml-2">admin</span>
+                  </label>
+                </div>
+              </div>
+              <div class="form-control">
+                <label class="label"><span class="label-text">Allowed Queues (comma-separated)</span></label>
+                <input v-model="newKeyForm.allowedQueues" class="input input-bordered" placeholder="* or orders.*,payments.*">
+              </div>
+            </div>
+            <div class="modal-action">
+              <button class="btn btn-ghost" @click="showCreateKeyModal = false">Cancel</button>
+              <button class="btn btn-primary" @click="createApiKey">Create</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Show Key Modal -->
+        <div class="modal" :class="{ 'modal-open': createdKeyRaw }">
+          <div class="modal-box">
+            <h3 class="font-bold text-lg text-success">API Key Created!</h3>
+            <div class="py-4">
+              <div class="alert alert-warning mb-4">
+                <span>Save this key now! It cannot be retrieved later.</span>
+              </div>
+              <div class="form-control">
+                <label class="label"><span class="label-text">Raw Key</span></label>
+                <input :value="createdKeyRaw" class="input input-bordered font-mono" readonly>
+              </div>
+              <button class="btn btn-sm btn-ghost mt-2" @click="copyKey">Copy to Clipboard</button>
+            </div>
+            <div class="modal-action">
+              <button class="btn btn-primary" @click="createdKeyRaw = null; loadApiKeys()">Done</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Settings Tab -->
+      <div v-if="tab === 'settings'" class="space-y-4">
+        <div class="card bg-base-100 shadow-xl">
+          <div class="card-body">
+            <h2 class="card-title">Audit Mode</h2>
+            <p class="text-sm text-gray-500">Control how much job history is recorded. Reduce for high-throughput scenarios.</p>
+            <div class="form-control w-full max-w-xs">
+              <select v-model="settings.auditMode" class="select select-bordered" @change="updateSettings">
+                <option value="full">Full (jobs + events)</option>
+                <option value="jobs_only">Jobs Only (no events)</option>
+                <option value="off">Off (no history)</option>
+              </select>
+            </div>
+            <div class="mt-4">
+              <div class="badge" :class="auditModeBadge">Current: {{ settings.auditMode }}</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card bg-base-100 shadow-xl">
+          <div class="card-body">
+            <h2 class="card-title">System Info</h2>
+            <div class="stats shadow">
+              <div class="stat">
+                <div class="stat-title">Total Queues</div>
+                <div class="stat-value">{{ queues.length }}</div>
+              </div>
+              <div class="stat">
+                <div class="stat-title">Total API Keys</div>
+                <div class="stat-value">{{ apiKeys.length }}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Toast -->
+      <div class="toast toast-end" v-if="toast.show">
+        <div class="alert" :class="toast.type === 'error' ? 'alert-error' : 'alert-success'">
+          <span>{{ toast.message }}</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const { createApp, ref, computed, onMounted } = Vue;
+
+    createApp({
+      setup() {
+        const apiKey = ref(localStorage.getItem('sq_api_key') || '');
+        const connected = ref(false);
+        const tab = ref('queues');
+        const toast = ref({ show: false, message: '', type: 'success' });
+
+        const queues = ref([]);
+        const apiKeys = ref([]);
+        const settings = ref({ auditMode: 'full' });
+
+        const selectedQueue = ref(null);
+        const queueMessages = ref([]);
+        const messageFilter = ref('');
+        const viewingDlq = ref(false);
+        const selectedJobs = ref([]);
+
+        const showPublishModal = ref(false);
+        const publishForm = ref({ queue: '', payload: '{}', correlationId: '' });
+
+        const showCreateKeyModal = ref(false);
+        const newKeyForm = ref({ name: '', scopes: ['publish', 'consume'], allowedQueues: '*' });
+        const createdKeyRaw = ref(null);
+
+        const newQueueName = ref('');
+
+        const saveApiKey = () => {
+          localStorage.setItem('sq_api_key', apiKey.value);
+          testConnection();
+        };
+
+        const showToast = (message, type = 'success') => {
+          toast.value = { show: true, message, type };
+          setTimeout(() => toast.value.show = false, 3000);
+        };
+
+        const api = async (method, path, body = null) => {
+          const res = await fetch(`/v1${path}`, {
+            method,
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `ApiKey ${apiKey.value}`,
+            },
+            body: body ? JSON.stringify(body) : null,
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || 'Request failed');
+          return data;
+        };
+
+        const testConnection = async () => {
+          try {
+            await api('GET', '/admin/settings');
+            connected.value = true;
+            loadAll();
+          } catch {
+            connected.value = false;
+          }
+        };
+
+        const loadAll = () => {
+          loadQueues();
+          loadApiKeys();
+          loadSettings();
+        };
+
+        const loadQueues = async () => {
+          try {
+            const data = await api('GET', '/admin/queues');
+            queues.value = data.queues;
+          } catch (e) {
+            showToast(e.message, 'error');
+          }
+        };
+
+        const loadApiKeys = async () => {
+          try {
+            const data = await api('GET', '/admin/api-keys');
+            apiKeys.value = data.keys;
+          } catch (e) {
+            showToast(e.message, 'error');
+          }
+        };
+
+        const loadSettings = async () => {
+          try {
+            const data = await api('GET', '/admin/settings');
+            settings.value = data;
+          } catch (e) {
+            showToast(e.message, 'error');
+          }
+        };
+
+        const updateSettings = async () => {
+          try {
+            await api('POST', '/admin/settings', { auditMode: settings.value.auditMode });
+            showToast('Settings updated');
+          } catch (e) {
+            showToast(e.message, 'error');
+          }
+        };
+
+        const viewQueue = async (name) => {
+          selectedQueue.value = name;
+          viewingDlq.value = false;
+          messageFilter.value = '';
+          selectedJobs.value = [];
+          await loadQueueMessages();
+        };
+
+        const viewDlq = async (name) => {
+          selectedQueue.value = name;
+          viewingDlq.value = true;
+          messageFilter.value = 'dlq';
+          selectedJobs.value = [];
+          await loadQueueMessages();
+        };
+
+        const loadQueueMessages = async () => {
+          try {
+            const filter = messageFilter.value ? `?status=${messageFilter.value}` : '';
+            const data = await api('GET', `/admin/queues/${encodeURIComponent(selectedQueue.value)}/messages${filter}`);
+            queueMessages.value = data.jobs;
+          } catch (e) {
+            showToast(e.message, 'error');
+          }
+        };
+
+        const publishMessage = async () => {
+          try {
+            let payload;
+            try {
+              payload = JSON.parse(publishForm.value.payload);
+            } catch {
+              showToast('Invalid JSON payload', 'error');
+              return;
+            }
+            await api('POST', `/admin/queues/${encodeURIComponent(publishForm.value.queue)}/publish`, {
+              payload,
+              correlationId: publishForm.value.correlationId || undefined,
+            });
+            showToast('Message published');
+            showPublishModal.value = false;
+            publishForm.value = { queue: '', payload: '{}', correlationId: '' };
+            loadQueues();
+          } catch (e) {
+            showToast(e.message, 'error');
+          }
+        };
+
+        const requeueSelected = async () => {
+          try {
+            await api('POST', `/admin/queues/${encodeURIComponent(selectedQueue.value)}/requeue`, {
+              jobIds: selectedJobs.value,
+            });
+            showToast(`Requeued ${selectedJobs.value.length} messages`);
+            selectedJobs.value = [];
+            loadQueueMessages();
+            loadQueues();
+          } catch (e) {
+            showToast(e.message, 'error');
+          }
+        };
+
+        const purgeQueue = async () => {
+          if (!confirm('Are you sure you want to purge the DLQ?')) return;
+          try {
+            const data = await api('POST', `/admin/queues/${encodeURIComponent(selectedQueue.value)}/purge`, {
+              status: 'dlq',
+            });
+            showToast(`Purged ${data.deleted} messages`);
+            loadQueueMessages();
+            loadQueues();
+          } catch (e) {
+            showToast(e.message, 'error');
+          }
+        };
+
+        const startConsumer = async () => {
+          try {
+            await api('POST', `/admin/queues/${encodeURIComponent(newQueueName.value)}/consumer`);
+            showToast(`Consumer started for ${newQueueName.value}`);
+            newQueueName.value = '';
+          } catch (e) {
+            showToast(e.message, 'error');
+          }
+        };
+
+        const toggleAllJobs = (e) => {
+          if (e.target.checked) {
+            selectedJobs.value = queueMessages.value.map(j => j.jobId);
+          } else {
+            selectedJobs.value = [];
+          }
+        };
+
+        const createApiKey = async () => {
+          try {
+            const data = await api('POST', '/admin/api-keys', {
+              name: newKeyForm.value.name,
+              scopes: newKeyForm.value.scopes,
+              allowedQueues: newKeyForm.value.allowedQueues.split(',').map(s => s.trim()),
+            });
+            createdKeyRaw.value = data.rawKey;
+            showCreateKeyModal.value = false;
+            newKeyForm.value = { name: '', scopes: ['publish', 'consume'], allowedQueues: '*' };
+          } catch (e) {
+            showToast(e.message, 'error');
+          }
+        };
+
+        const toggleKeyEnabled = async (key) => {
+          try {
+            await api('PATCH', `/admin/api-keys/${key._id}`, { enabled: !key.enabled });
+            loadApiKeys();
+          } catch (e) {
+            showToast(e.message, 'error');
+          }
+        };
+
+        const deleteKey = async (key) => {
+          if (!confirm(`Delete API key "${key.name}"?`)) return;
+          try {
+            await api('DELETE', `/admin/api-keys/${key._id}`);
+            showToast('API key deleted');
+            loadApiKeys();
+          } catch (e) {
+            showToast(e.message, 'error');
+          }
+        };
+
+        const copyKey = () => {
+          navigator.clipboard.writeText(createdKeyRaw.value);
+          showToast('Copied to clipboard');
+        };
+
+        const formatDate = (d) => {
+          if (!d) return '-';
+          return new Date(d).toLocaleString();
+        };
+
+        const statusBadge = (status) => ({
+          'badge-info': status === 'queued',
+          'badge-warning': status === 'delivered',
+          'badge-success': status === 'acked',
+          'badge-error': status === 'dlq' || status === 'failed',
+        });
+
+        const auditModeBadge = computed(() => ({
+          'badge-success': settings.value.auditMode === 'full',
+          'badge-warning': settings.value.auditMode === 'jobs_only',
+          'badge-error': settings.value.auditMode === 'off',
+        }));
+
+        onMounted(() => {
+          if (apiKey.value) testConnection();
+        });
+
+        return {
+          apiKey, connected, tab, toast,
+          queues, apiKeys, settings,
+          selectedQueue, queueMessages, messageFilter, viewingDlq, selectedJobs,
+          showPublishModal, publishForm,
+          showCreateKeyModal, newKeyForm, createdKeyRaw,
+          newQueueName,
+          saveApiKey, loadQueues, loadApiKeys, updateSettings,
+          viewQueue, viewDlq, loadQueueMessages,
+          publishMessage, requeueSelected, purgeQueue, startConsumer, toggleAllJobs,
+          createApiKey, toggleKeyEnabled, deleteKey, copyKey,
+          formatDate, statusBadge, auditModeBadge,
+        };
+      },
+    }).mount('#app');
+  </script>
+</body>
+</html>

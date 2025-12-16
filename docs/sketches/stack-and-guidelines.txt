@@ -1,0 +1,1 @@
+My stack: tailwind cdn, daisyuicdn, vue3cdn (no vue deps), nodejs, ejs only if needed, mongo mongoose, modular approach, files < 500 LOC, controllers for backend routes for easy testing, mock support for easy unit tests. Docker/docker-compose compose files
