@@ -1,6 +1,6 @@
 {
   "name": "@superqueues/sdk",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "JavaScript SDK for SuperQueues gateway - HTTP and WebSocket support",
   "main": "index.js",
   "type": "commonjs",
@@ -14,7 +14,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/your-org/superqueues"
+    "url": "https://github.com/javimosch/superqueues"
   },
   "engines": {
     "node": ">=18.0.0"

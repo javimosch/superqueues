@@ -6,6 +6,10 @@
   "author": "Javier Leandro Arancibia <arancibiajav@gmail.com>",
   "type": "commonjs",
   "main": "src/index.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/javimosch/superqueues.git"
+  },
   "scripts": {
     "start": "node src/index.js",
     "dev": "npx nodemon src/index.js --watch src",
