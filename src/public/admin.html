@@ -273,10 +273,44 @@
 
       <!-- Broker Tab -->
       <div v-if="tab === 'broker'" class="space-y-4">
-        <div class="flex gap-2 items-center">
+        <div class="flex gap-2 items-center flex-wrap">
           <button class="btn btn-primary btn-sm" @click="loadBroker">Refresh</button>
           <div class="badge" :class="brokerConnected ? 'badge-success' : 'badge-error'">
             {{ brokerConnected ? 'Broker Connected' : 'Broker Unreachable' }}
+          </div>
+          <div v-if="clusterInfo?.isCluster" class="badge badge-info">
+            Cluster: {{ clusterInfo.runningNodes }}/{{ clusterInfo.totalNodes }} nodes
+          </div>
+          <div v-if="clusterInfo?.hasPartitions" class="badge badge-error">
+            ⚠️ Network Partition Detected
+          </div>
+        </div>
+
+        <div v-if="clusterInfo?.isCluster" class="card bg-base-100 shadow-xl">
+          <div class="card-body p-4">
+            <h2 class="card-title text-sm">Cluster Topology</h2>
+            <div class="flex flex-wrap gap-3">
+              <div v-for="node in clusterInfo.nodes" :key="node.name" 
+                   class="card bg-base-200 p-3 min-w-48">
+                <div class="flex items-center gap-2">
+                  <span class="badge badge-xs" :class="node.running ? 'badge-success' : 'badge-error'">
+                    {{ node.running ? '●' : '○' }}
+                  </span>
+                  <span class="font-mono text-sm">{{ node.name.split('@')[1] || node.name }}</span>
+                </div>
+                <div class="text-xs text-gray-400 mt-1">
+                  <span class="badge badge-xs badge-outline">{{ node.type }}</span>
+                  <span v-if="node.memAlarm" class="badge badge-xs badge-error ml-1">mem alarm</span>
+                  <span v-if="node.diskFreeAlarm" class="badge badge-xs badge-error ml-1">disk alarm</span>
+                </div>
+                <div class="text-xs text-gray-500 mt-1">
+                  Mem: {{ formatBytes(node.memUsed) }} | Disk: {{ formatBytes(node.diskFree) }}
+                </div>
+                <div v-if="node.uptimeMs" class="text-xs text-gray-500">
+                  Uptime: {{ formatUptime(node.uptimeMs) }}
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -559,6 +593,7 @@
         const brokerQueues = ref([]);
         const brokerConnections = ref([]);
         const brokerNodes = ref([]);
+        const clusterInfo = ref(null);
 
         const brokerQueueName = ref('');
         const brokerQueueVhost = ref('');
@@ -724,16 +759,18 @@
 
         const loadBroker = async () => {
           try {
-            const [overview, queuesData, connections, nodes] = await Promise.all([
+            const [overview, queuesData, connections, nodes, cluster] = await Promise.all([
               api('GET', '/admin/broker/overview').catch(() => null),
               api('GET', '/admin/broker/queues').catch(() => ({ queues: [] })),
               api('GET', '/admin/broker/connections').catch(() => ({ connections: [] })),
               api('GET', '/admin/broker/nodes').catch(() => ({ nodes: [] })),
+              api('GET', '/admin/broker/cluster').catch(() => null),
             ]);
             brokerOverview.value = overview;
             brokerQueues.value = queuesData.queues || [];
             brokerConnections.value = connections.connections || [];
             brokerNodes.value = nodes.nodes || [];
+            clusterInfo.value = cluster;
             brokerConnected.value = !!overview;
             brokerPage.value = 1;
           } catch (e) {
@@ -748,6 +785,18 @@
           const sizes = ['B', 'KB', 'MB', 'GB'];
           const i = Math.floor(Math.log(bytes) / Math.log(k));
           return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+        };
+
+        const formatUptime = (ms) => {
+          if (!ms) return '-';
+          const seconds = Math.floor(ms / 1000);
+          const minutes = Math.floor(seconds / 60);
+          const hours = Math.floor(minutes / 60);
+          const days = Math.floor(hours / 24);
+          if (days > 0) return `${days}d ${hours % 24}h`;
+          if (hours > 0) return `${hours}h ${minutes % 60}m`;
+          if (minutes > 0) return `${minutes}m`;
+          return `${seconds}s`;
         };
 
         const loadApiKeys = async () => {
@@ -937,6 +986,7 @@
           apiKey, connected, tab, toast,
           queues, mergedQueues, apiKeys, settings, showBrokerColumns,
           brokerConnected, brokerOverview, brokerQueues, brokerConnections, brokerNodes,
+          clusterInfo,
           brokerQueueName, brokerQueueVhost, brokerQueueVhosts,
           brokerMinReady, brokerMinUnacked, brokerHideEmpty,
           brokerPageSize, brokerPage,
@@ -951,7 +1001,7 @@
           viewQueue, viewDlq, loadQueueMessages,
           publishMessage, requeueSelected, purgeQueue, startConsumer, toggleAllJobs,
           createApiKey, toggleKeyEnabled, deleteKey, copyKey,
-          formatDate, formatBytes, statusBadge, auditModeBadge,
+          formatDate, formatBytes, formatUptime, statusBadge, auditModeBadge,
         };
       },
     }).mount('#app');

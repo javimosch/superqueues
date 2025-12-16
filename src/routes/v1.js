@@ -126,6 +126,11 @@ router.get('/admin/broker/nodes',
   admin.getBrokerNodes
 );
 
+router.get('/admin/broker/cluster',
+  requireAuth('admin'),
+  admin.getBrokerClusterInfo
+);
+
 router.get('/admin/queues/merged',
   requireAuth('admin'),
   admin.getMergedQueues

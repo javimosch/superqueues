@@ -182,6 +182,40 @@ async function getNodes() {
   }));
 }
 
+async function getClusterInfo() {
+  const [overview, nodes] = await Promise.all([
+    request('/overview'),
+    request('/nodes'),
+  ]);
+
+  const runningNodes = nodes.filter(n => n.running);
+  const discNodes = nodes.filter(n => n.type === 'disc');
+  const ramNodes = nodes.filter(n => n.type === 'ram');
+
+  return {
+    clusterName: overview.cluster_name,
+    isCluster: nodes.length > 1,
+    totalNodes: nodes.length,
+    runningNodes: runningNodes.length,
+    discNodes: discNodes.length,
+    ramNodes: ramNodes.length,
+    partitions: overview.partitions || [],
+    hasPartitions: (overview.partitions || []).length > 0,
+    nodes: nodes.map(n => ({
+      name: n.name,
+      type: n.type,
+      running: n.running,
+      memUsed: n.mem_used,
+      memLimit: n.mem_limit,
+      memAlarm: n.mem_alarm,
+      diskFree: n.disk_free,
+      diskFreeAlarm: n.disk_free_alarm,
+      uptimeMs: n.uptime,
+      clusterLinks: n.cluster_links || [],
+    })),
+  };
+}
+
 async function ping() {
   try {
     await request('/overview');
@@ -197,5 +231,6 @@ module.exports = {
   getQueue,
   getConnections,
   getNodes,
+  getClusterInfo,
   ping,
 };

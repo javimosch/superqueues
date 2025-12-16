@@ -293,6 +293,15 @@ async function getBrokerNodes(req, res, next) {
   }
 }
 
+async function getBrokerClusterInfo(req, res, next) {
+  try {
+    const clusterInfo = await broker.getClusterInfo();
+    res.json(clusterInfo);
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function getMergedQueues(req, res, next) {
   try {
     const [brokerQueues, jobStats] = await Promise.all([
@@ -377,5 +386,6 @@ module.exports = {
   getBrokerQueue,
   getBrokerConnections,
   getBrokerNodes,
+  getBrokerClusterInfo,
   getMergedQueues,
 };
