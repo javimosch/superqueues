@@ -346,11 +346,54 @@
         <div class="card bg-base-100 shadow-xl">
           <div class="card-body">
             <h2 class="card-title">Broker Queues</h2>
+            <div class="flex flex-wrap gap-2 items-end">
+              <div class="form-control">
+                <label class="label"><span class="label-text text-xs">Queue name</span></label>
+                <input v-model="brokerQueueName" class="input input-bordered input-sm w-64" placeholder="search..." @input="brokerPage = 1">
+              </div>
+              <div class="form-control">
+                <label class="label"><span class="label-text text-xs">Vhost</span></label>
+                <select v-model="brokerQueueVhost" class="select select-bordered select-sm w-56" @change="brokerPage = 1">
+                  <option value="">All vhosts</option>
+                  <option v-for="v in brokerQueueVhosts" :key="v" :value="v">{{ v }}</option>
+                </select>
+              </div>
+              <div class="form-control">
+                <label class="label"><span class="label-text text-xs">Min ready</span></label>
+                <input v-model.number="brokerMinReady" type="number" min="0" class="input input-bordered input-sm w-28" @input="brokerPage = 1">
+              </div>
+              <div class="form-control">
+                <label class="label"><span class="label-text text-xs">Min unacked</span></label>
+                <input v-model.number="brokerMinUnacked" type="number" min="0" class="input input-bordered input-sm w-28" @input="brokerPage = 1">
+              </div>
+              <label class="label cursor-pointer gap-2">
+                <span class="label-text text-xs">Hide empty</span>
+                <input type="checkbox" v-model="brokerHideEmpty" class="checkbox checkbox-xs" @change="brokerPage = 1">
+              </label>
+              <div class="form-control">
+                <label class="label"><span class="label-text text-xs">Page size</span></label>
+                <select v-model.number="brokerPageSize" class="select select-bordered select-sm w-32" @change="brokerPage = 1">
+                  <option :value="10">10</option>
+                  <option :value="25">25</option>
+                  <option :value="50">50</option>
+                  <option :value="100">100</option>
+                </select>
+              </div>
+              <div class="ml-auto flex items-center gap-2">
+                <div class="text-xs text-gray-400">
+                  Showing {{ brokerQueuesRangeStart }}-{{ brokerQueuesRangeEnd }} of {{ brokerQueuesFilteredCount }}
+                </div>
+                <button class="btn btn-xs" @click="prevBrokerPage" :disabled="brokerPage <= 1">Prev</button>
+                <div class="badge badge-outline">{{ brokerPage }} / {{ brokerQueuesPageCount || 1 }}</div>
+                <button class="btn btn-xs" @click="nextBrokerPage" :disabled="brokerQueuesPageCount === 0 || brokerPage >= brokerQueuesPageCount">Next</button>
+              </div>
+            </div>
             <div class="overflow-x-auto">
               <table class="table table-zebra table-sm w-full">
                 <thead>
                   <tr>
                     <th>Queue</th>
+                    <th>Vhost</th>
                     <th>State</th>
                     <th>Ready</th>
                     <th>Unacked</th>
@@ -361,8 +404,9 @@
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-for="q in brokerQueues" :key="q.name">
+                  <tr v-for="q in brokerQueuesPaged" :key="q.vhost + ':' + q.name">
                     <td class="font-mono text-xs">{{ q.name }}</td>
+                    <td class="font-mono text-xs">{{ q.vhost }}</td>
                     <td>
                       <span class="badge badge-xs" :class="q.state === 'running' ? 'badge-success' : 'badge-warning'">{{ q.state }}</span>
                     </td>
@@ -373,8 +417,8 @@
                     <td>{{ q.messageStats.publishRate.toFixed(1) }}</td>
                     <td>{{ q.messageStats.deliverRate.toFixed(1) }}</td>
                   </tr>
-                  <tr v-if="brokerQueues.length === 0">
-                    <td colspan="8" class="text-center text-gray-500">No queues in broker</td>
+                  <tr v-if="brokerQueuesPaged.length === 0">
+                    <td colspan="9" class="text-center text-gray-500">No queues match filters</td>
                   </tr>
                 </tbody>
               </table>
@@ -495,7 +539,7 @@
   </div>
 
   <script>
-    const { createApp, ref, computed, onMounted } = Vue;
+    const { createApp, ref, computed, onMounted, watch } = Vue;
 
     createApp({
       setup() {
@@ -515,6 +559,95 @@
         const brokerQueues = ref([]);
         const brokerConnections = ref([]);
         const brokerNodes = ref([]);
+
+        const brokerQueueName = ref('');
+        const brokerQueueVhost = ref('');
+        const brokerMinReady = ref(0);
+        const brokerMinUnacked = ref(0);
+        const brokerHideEmpty = ref(false);
+        const brokerPageSize = ref(25);
+        const brokerPage = ref(1);
+
+        const brokerQueueVhosts = computed(() => {
+          const vhosts = new Set((brokerQueues.value || []).map(q => q.vhost).filter(Boolean));
+          return Array.from(vhosts).sort();
+        });
+
+        const brokerQueuesFiltered = computed(() => {
+          const nameNeedle = (brokerQueueName.value || '').trim().toLowerCase();
+          const vhostNeedle = brokerQueueVhost.value;
+          const minReady = Number.isFinite(brokerMinReady.value) ? brokerMinReady.value : 0;
+          const minUnacked = Number.isFinite(brokerMinUnacked.value) ? brokerMinUnacked.value : 0;
+          const hideEmpty = !!brokerHideEmpty.value;
+
+          return (brokerQueues.value || []).filter(q => {
+            if (vhostNeedle && q.vhost !== vhostNeedle) return false;
+            if (nameNeedle && !(q.name || '').toLowerCase().includes(nameNeedle)) return false;
+            if (hideEmpty && (q.messages || 0) === 0) return false;
+            if ((q.messagesReady || 0) < minReady) return false;
+            if ((q.messagesUnacked || 0) < minUnacked) return false;
+            return true;
+          });
+        });
+
+        const brokerQueuesFilteredCount = computed(() => brokerQueuesFiltered.value.length);
+
+        const brokerQueuesPageCount = computed(() => {
+          const total = brokerQueuesFiltered.value.length;
+          if (total === 0) return 0;
+          return Math.ceil(total / brokerPageSize.value);
+        });
+
+        const brokerQueuesPaged = computed(() => {
+          const total = brokerQueuesFiltered.value.length;
+          if (total === 0) return [];
+          const pageCount = brokerQueuesPageCount.value || 1;
+          const page = Math.min(Math.max(1, brokerPage.value), pageCount);
+          const start = (page - 1) * brokerPageSize.value;
+          return brokerQueuesFiltered.value.slice(start, start + brokerPageSize.value);
+        });
+
+        const brokerQueuesRangeStart = computed(() => {
+          if (brokerQueuesFiltered.value.length === 0) return 0;
+          const pageCount = brokerQueuesPageCount.value || 1;
+          const page = Math.min(Math.max(1, brokerPage.value), pageCount);
+          return (page - 1) * brokerPageSize.value + 1;
+        });
+
+        const brokerQueuesRangeEnd = computed(() => {
+          if (brokerQueuesFiltered.value.length === 0) return 0;
+          return Math.min(brokerQueuesRangeStart.value + brokerQueuesPaged.value.length - 1, brokerQueuesFiltered.value.length);
+        });
+
+        const prevBrokerPage = () => {
+          brokerPage.value = Math.max(1, brokerPage.value - 1);
+        };
+
+        const nextBrokerPage = () => {
+          const pc = brokerQueuesPageCount.value;
+          if (pc === 0) return;
+          brokerPage.value = Math.min(pc, brokerPage.value + 1);
+        };
+
+        watch([
+          brokerQueueName,
+          brokerQueueVhost,
+          brokerMinReady,
+          brokerMinUnacked,
+          brokerHideEmpty,
+        ], () => {
+          brokerPage.value = 1;
+        });
+
+        watch([brokerQueuesFiltered, brokerPageSize], () => {
+          const pc = brokerQueuesPageCount.value;
+          if (pc === 0) {
+            brokerPage.value = 1;
+            return;
+          }
+          if (brokerPage.value > pc) brokerPage.value = pc;
+          if (brokerPage.value < 1) brokerPage.value = 1;
+        });
 
         const selectedQueue = ref(null);
         const queueMessages = ref([]);
@@ -602,6 +735,7 @@
             brokerConnections.value = connections.connections || [];
             brokerNodes.value = nodes.nodes || [];
             brokerConnected.value = !!overview;
+            brokerPage.value = 1;
           } catch (e) {
             brokerConnected.value = false;
             showToast(e.message, 'error');
@@ -803,11 +937,17 @@
           apiKey, connected, tab, toast,
           queues, mergedQueues, apiKeys, settings, showBrokerColumns,
           brokerConnected, brokerOverview, brokerQueues, brokerConnections, brokerNodes,
+          brokerQueueName, brokerQueueVhost, brokerQueueVhosts,
+          brokerMinReady, brokerMinUnacked, brokerHideEmpty,
+          brokerPageSize, brokerPage,
+          brokerQueuesFilteredCount, brokerQueuesPageCount, brokerQueuesPaged,
+          brokerQueuesRangeStart, brokerQueuesRangeEnd,
           selectedQueue, queueMessages, messageFilter, viewingDlq, selectedJobs,
           showPublishModal, publishForm,
           showCreateKeyModal, newKeyForm, createdKeyRaw,
           newQueueName,
           saveApiKey, loadQueues, loadMergedQueues, loadBroker, loadApiKeys, updateSettings,
+          prevBrokerPage, nextBrokerPage,
           viewQueue, viewDlq, loadQueueMessages,
           publishMessage, requeueSelected, purgeQueue, startConsumer, toggleAllJobs,
           createApiKey, toggleKeyEnabled, deleteKey, copyKey,
