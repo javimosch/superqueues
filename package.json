@@ -2,8 +2,8 @@
   "name": "superqueues",
   "version": "1.0.0",
   "description": "RabbitMQ wrapper gateway with HTTP API",
-  "license": "ISC",
-  "author": "",
+  "license": "MIT",
+  "author": "Javier Leandro Arancibia <arancibiajav@gmail.com>",
   "type": "commonjs",
   "main": "src/index.js",
   "scripts": {
