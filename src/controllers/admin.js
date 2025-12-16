@@ -1,5 +1,5 @@
 const crypto = require('crypto');
-const { ApiKey, Job } = require('../models');
+const { ApiKey, ApiKeyUsageEvent, Job } = require('../models');
 const { audit, rabbitmq, queue: queueService, broker } = require('../services');
 const { hashKey } = require('../middleware/auth');
 
@@ -302,6 +302,149 @@ async function getBrokerClusterInfo(req, res, next) {
   }
 }
 
+async function getApiKeyUsage(req, res, next) {
+  try {
+    const { id } = req.params;
+    const { from, to, action, queue, status, limit = 50, cursor } = req.query;
+
+    const apiKey = await ApiKey.findById(id, '-keyHash');
+    if (!apiKey) {
+      return res.status(404).json({ error: 'API key not found' });
+    }
+
+    const filter = { apiKeyId: id };
+
+    if (from || to) {
+      filter.at = {};
+      if (from) filter.at.$gte = new Date(from);
+      if (to) filter.at.$lte = new Date(to);
+    }
+
+    if (action) filter.action = action;
+    if (queue) filter.queue = queue;
+    if (status) {
+      if (status === 'success') {
+        filter['http.statusCode'] = { $lt: 400 };
+      } else if (status === 'error') {
+        filter['http.statusCode'] = { $gte: 400 };
+      }
+    }
+
+    if (cursor) {
+      filter._id = { $lt: cursor };
+    }
+
+    const maxLimit = Math.min(parseInt(limit, 10) || 50, 200);
+
+    const events = await ApiKeyUsageEvent.find(filter)
+      .sort({ _id: -1 })
+      .limit(maxLimit + 1)
+      .lean();
+
+    let nextCursor = null;
+    if (events.length > maxLimit) {
+      events.pop();
+      nextCursor = events[events.length - 1]._id.toString();
+    }
+
+    res.json({ events, nextCursor });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function getApiKeyUsageSummary(req, res, next) {
+  try {
+    const { id } = req.params;
+    const { from, to, groupBy = 'day' } = req.query;
+
+    const apiKey = await ApiKey.findById(id, '-keyHash');
+    if (!apiKey) {
+      return res.status(404).json({ error: 'API key not found' });
+    }
+
+    const match = { apiKeyId: apiKey._id };
+    if (from || to) {
+      match.at = {};
+      if (from) match.at.$gte = new Date(from);
+      if (to) match.at.$lte = new Date(to);
+    }
+
+    let dateFormat;
+    if (groupBy === 'hour') {
+      dateFormat = { $dateToString: { format: '%Y-%m-%dT%H:00:00Z', date: '$at' } };
+    } else {
+      dateFormat = { $dateToString: { format: '%Y-%m-%d', date: '$at' } };
+    }
+
+    const pipeline = [
+      { $match: match },
+      {
+        $group: {
+          _id: {
+            bucket: dateFormat,
+            action: '$action',
+          },
+          count: { $sum: 1 },
+          errors: { $sum: { $cond: [{ $gte: ['$http.statusCode', 400] }, 1, 0] } },
+          avgLatencyMs: { $avg: '$latencyMs' },
+        },
+      },
+      {
+        $group: {
+          _id: '$_id.bucket',
+          actions: {
+            $push: {
+              action: '$_id.action',
+              count: '$count',
+              errors: '$errors',
+              avgLatencyMs: { $round: ['$avgLatencyMs', 2] },
+            },
+          },
+          totalCount: { $sum: '$count' },
+          totalErrors: { $sum: '$errors' },
+        },
+      },
+      { $sort: { _id: -1 } },
+      { $limit: 90 },
+    ];
+
+    const buckets = await ApiKeyUsageEvent.aggregate(pipeline);
+
+    const totals = await ApiKeyUsageEvent.aggregate([
+      { $match: match },
+      {
+        $group: {
+          _id: '$action',
+          count: { $sum: 1 },
+          errors: { $sum: { $cond: [{ $gte: ['$http.statusCode', 400] }, 1, 0] } },
+          avgLatencyMs: { $avg: '$latencyMs' },
+        },
+      },
+    ]);
+
+    res.json({
+      apiKeyId: id,
+      apiKeyName: apiKey.name,
+      groupBy,
+      buckets: buckets.map(b => ({
+        bucket: b._id,
+        totalCount: b.totalCount,
+        totalErrors: b.totalErrors,
+        actions: b.actions,
+      })),
+      totals: totals.map(t => ({
+        action: t._id,
+        count: t.count,
+        errors: t.errors,
+        avgLatencyMs: Math.round(t.avgLatencyMs * 100) / 100,
+      })),
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function getMergedQueues(req, res, next) {
   try {
     const [brokerQueues, jobStats] = await Promise.all([
@@ -375,6 +518,8 @@ module.exports = {
   createApiKey,
   updateApiKey,
   deleteApiKey,
+  getApiKeyUsage,
+  getApiKeyUsageSummary,
   listQueues,
   getQueueMessages,
   publishTestMessage,
