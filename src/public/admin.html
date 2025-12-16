@@ -29,6 +29,7 @@
         <a class="tab" :class="{ 'tab-active': tab === 'queues' }" @click="tab = 'queues'">Queues</a>
         <a class="tab" :class="{ 'tab-active': tab === 'broker' }" @click="tab = 'broker'; loadBroker()">Broker</a>
         <a class="tab" :class="{ 'tab-active': tab === 'api-keys' }" @click="tab = 'api-keys'">API Keys</a>
+        <a class="tab" :class="{ 'tab-active': tab === 'audit' }" @click="tab = 'audit'; loadAuditKeys()">Audit</a>
         <a class="tab" :class="{ 'tab-active': tab === 'settings' }" @click="tab = 'settings'">Settings</a>
       </div>
 
@@ -523,6 +524,148 @@
         </div>
       </div>
 
+      <!-- Audit Tab -->
+      <div v-if="tab === 'audit'" class="space-y-4">
+        <div class="card bg-base-100 shadow-xl">
+          <div class="card-body">
+            <h2 class="card-title">API Key Usage Audit</h2>
+            <div class="flex flex-wrap gap-3 items-end">
+              <div class="form-control">
+                <label class="label"><span class="label-text text-xs">API Key</span></label>
+                <select v-model="auditKeyId" class="select select-bordered select-sm w-64" @change="loadAuditUsage">
+                  <option value="">Select an API key</option>
+                  <option v-for="key in auditKeys" :key="key._id" :value="key._id">{{ key.name }}</option>
+                </select>
+              </div>
+              <div class="form-control">
+                <label class="label"><span class="label-text text-xs">From</span></label>
+                <input type="date" v-model="auditFrom" class="input input-bordered input-sm" @change="loadAuditUsage">
+              </div>
+              <div class="form-control">
+                <label class="label"><span class="label-text text-xs">To</span></label>
+                <input type="date" v-model="auditTo" class="input input-bordered input-sm" @change="loadAuditUsage">
+              </div>
+              <div class="form-control">
+                <label class="label"><span class="label-text text-xs">Action</span></label>
+                <select v-model="auditAction" class="select select-bordered select-sm" @change="loadAuditUsage">
+                  <option value="">All actions</option>
+                  <option value="queues.publish">queues.publish</option>
+                  <option value="queues.pull">queues.pull</option>
+                  <option value="queues.ack">queues.ack</option>
+                  <option value="queues.nack">queues.nack</option>
+                  <option value="admin.listApiKeys">admin.listApiKeys</option>
+                  <option value="admin.createApiKey">admin.createApiKey</option>
+                  <option value="admin.listQueues">admin.listQueues</option>
+                </select>
+              </div>
+              <div class="form-control">
+                <label class="label"><span class="label-text text-xs">Status</span></label>
+                <select v-model="auditStatus" class="select select-bordered select-sm" @change="loadAuditUsage">
+                  <option value="">All</option>
+                  <option value="success">Success</option>
+                  <option value="error">Error</option>
+                </select>
+              </div>
+              <button class="btn btn-primary btn-sm" @click="loadAuditUsage" :disabled="!auditKeyId">Refresh</button>
+              <button class="btn btn-secondary btn-sm" @click="loadAuditSummary" :disabled="!auditKeyId">Summary</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Usage Summary -->
+        <div v-if="auditSummary" class="card bg-base-100 shadow-xl">
+          <div class="card-body">
+            <div class="flex justify-between items-center">
+              <h2 class="card-title">Usage Summary: {{ auditSummary.apiKeyName }}</h2>
+              <button class="btn btn-ghost btn-xs" @click="auditSummary = null">✕</button>
+            </div>
+            <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 mt-2">
+              <div v-for="t in auditSummary.totals" :key="t.action" class="stat bg-base-200 rounded-lg p-3">
+                <div class="stat-title text-xs truncate">{{ t.action }}</div>
+                <div class="stat-value text-lg">{{ t.count }}</div>
+                <div class="stat-desc text-xs">
+                  <span class="text-error">{{ t.errors }} err</span> · {{ t.avgLatencyMs }}ms avg
+                </div>
+              </div>
+            </div>
+            <div class="divider">Daily Breakdown</div>
+            <div class="overflow-x-auto max-h-64">
+              <table class="table table-xs w-full">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Total</th>
+                    <th>Errors</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="b in auditSummary.buckets" :key="b.bucket">
+                    <td class="font-mono">{{ b.bucket }}</td>
+                    <td><span class="badge badge-sm badge-info">{{ b.totalCount }}</span></td>
+                    <td><span class="badge badge-sm" :class="b.totalErrors > 0 ? 'badge-error' : 'badge-ghost'">{{ b.totalErrors }}</span></td>
+                    <td class="text-xs">
+                      <span v-for="a in b.actions" :key="a.action" class="mr-2">
+                        {{ a.action.split('.')[1] || a.action }}: {{ a.count }}
+                      </span>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Usage Events -->
+        <div v-if="auditKeyId" class="card bg-base-100 shadow-xl">
+          <div class="card-body">
+            <h2 class="card-title">Recent Events</h2>
+            <div class="overflow-x-auto">
+              <table class="table table-zebra table-sm w-full">
+                <thead>
+                  <tr>
+                    <th>Timestamp</th>
+                    <th>Action</th>
+                    <th>Scope</th>
+                    <th>Queue</th>
+                    <th>Method</th>
+                    <th>Status</th>
+                    <th>Latency</th>
+                    <th>IP</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="e in auditEvents" :key="e._id">
+                    <td class="text-xs">{{ formatDate(e.at) }}</td>
+                    <td class="font-mono text-xs">{{ e.action }}</td>
+                    <td><span class="badge badge-xs badge-outline">{{ e.scope }}</span></td>
+                    <td class="font-mono text-xs">{{ e.queue || '-' }}</td>
+                    <td class="text-xs">{{ e.http.method }}</td>
+                    <td>
+                      <span class="badge badge-xs" :class="e.http.statusCode < 400 ? 'badge-success' : 'badge-error'">
+                        {{ e.http.statusCode }}
+                      </span>
+                    </td>
+                    <td class="text-xs">{{ e.latencyMs }}ms</td>
+                    <td class="text-xs text-gray-500">{{ e.ip }}</td>
+                  </tr>
+                  <tr v-if="auditEvents.length === 0">
+                    <td colspan="8" class="text-center text-gray-500">No events found</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="flex justify-end mt-2" v-if="auditNextCursor">
+              <button class="btn btn-sm btn-ghost" @click="loadMoreAuditEvents">Load More</button>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="!auditKeyId" class="alert">
+          <span>Select an API key to view usage audit data.</span>
+        </div>
+      </div>
+
       <!-- Settings Tab -->
       <div v-if="tab === 'settings'" class="space-y-4">
         <div class="card bg-base-100 shadow-xl">
@@ -698,6 +841,16 @@
         const createdKeyRaw = ref(null);
 
         const newQueueName = ref('');
+
+        const auditKeys = ref([]);
+        const auditKeyId = ref('');
+        const auditFrom = ref('');
+        const auditTo = ref('');
+        const auditAction = ref('');
+        const auditStatus = ref('');
+        const auditEvents = ref([]);
+        const auditNextCursor = ref(null);
+        const auditSummary = ref(null);
 
         const saveApiKey = () => {
           localStorage.setItem('sq_api_key', apiKey.value);
@@ -960,6 +1113,63 @@
           showToast('Copied to clipboard');
         };
 
+        const loadAuditKeys = async () => {
+          try {
+            const data = await api('GET', '/admin/api-keys');
+            auditKeys.value = data.keys;
+          } catch (e) {
+            showToast(e.message, 'error');
+          }
+        };
+
+        const loadAuditUsage = async () => {
+          if (!auditKeyId.value) return;
+          try {
+            const params = new URLSearchParams();
+            if (auditFrom.value) params.append('from', auditFrom.value);
+            if (auditTo.value) params.append('to', auditTo.value);
+            if (auditAction.value) params.append('action', auditAction.value);
+            if (auditStatus.value) params.append('status', auditStatus.value);
+            params.append('limit', '50');
+            const data = await api('GET', `/admin/api-keys/${auditKeyId.value}/usage?${params}`);
+            auditEvents.value = data.events;
+            auditNextCursor.value = data.nextCursor;
+          } catch (e) {
+            showToast(e.message, 'error');
+          }
+        };
+
+        const loadMoreAuditEvents = async () => {
+          if (!auditKeyId.value || !auditNextCursor.value) return;
+          try {
+            const params = new URLSearchParams();
+            if (auditFrom.value) params.append('from', auditFrom.value);
+            if (auditTo.value) params.append('to', auditTo.value);
+            if (auditAction.value) params.append('action', auditAction.value);
+            if (auditStatus.value) params.append('status', auditStatus.value);
+            params.append('limit', '50');
+            params.append('cursor', auditNextCursor.value);
+            const data = await api('GET', `/admin/api-keys/${auditKeyId.value}/usage?${params}`);
+            auditEvents.value = [...auditEvents.value, ...data.events];
+            auditNextCursor.value = data.nextCursor;
+          } catch (e) {
+            showToast(e.message, 'error');
+          }
+        };
+
+        const loadAuditSummary = async () => {
+          if (!auditKeyId.value) return;
+          try {
+            const params = new URLSearchParams();
+            if (auditFrom.value) params.append('from', auditFrom.value);
+            if (auditTo.value) params.append('to', auditTo.value);
+            const data = await api('GET', `/admin/api-keys/${auditKeyId.value}/usage/summary?${params}`);
+            auditSummary.value = data;
+          } catch (e) {
+            showToast(e.message, 'error');
+          }
+        };
+
         const formatDate = (d) => {
           if (!d) return '-';
           return new Date(d).toLocaleString();
@@ -1001,6 +1211,9 @@
           viewQueue, viewDlq, loadQueueMessages,
           publishMessage, requeueSelected, purgeQueue, startConsumer, toggleAllJobs,
           createApiKey, toggleKeyEnabled, deleteKey, copyKey,
+          auditKeys, auditKeyId, auditFrom, auditTo, auditAction, auditStatus,
+          auditEvents, auditNextCursor, auditSummary,
+          loadAuditKeys, loadAuditUsage, loadMoreAuditEvents, loadAuditSummary,
           formatDate, formatBytes, formatUptime, statusBadge, auditModeBadge,
         };
       },
