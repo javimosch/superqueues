@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SuperQueues Import Demo (SDK)</title>
+  <link href="https://cdn.jsdelivr.net/npm/daisyui@4.4.19/dist/full.min.css" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+</head>
+<body class="min-h-screen bg-base-200">
+  <div id="app" class="container mx-auto p-6 max-w-3xl">
+    <div class="card bg-base-100 shadow-xl">
+      <div class="card-body">
+        <h1 class="card-title">Import Demo (SDK Version)</h1>
+        <p class="text-sm text-gray-400">
+          This example uses <code class="text-primary">@superqueues/sdk</code> to interact with the gateway.
+          Upload a text file to see queue-based processing with real-time progress.
+        </p>
+
+        <div class="badge badge-secondary badge-outline">Using SDK</div>
+
+        <div class="divider"></div>
+
+        <form @submit.prevent="startImport" class="space-y-4">
+          <div class="form-control">
+            <label class="label"><span class="label-text">File</span></label>
+            <input type="file" class="file-input file-input-bordered" @change="onFile" />
+          </div>
+
+          <div class="form-control">
+            <label class="label"><span class="label-text">Simulated processing interval (ms)</span></label>
+            <input v-model.number="intervalMs" type="number" class="input input-bordered" min="50" />
+          </div>
+
+          <button class="btn btn-primary" :disabled="!file || running">
+            {{ running ? 'Import running...' : 'Start import' }}
+          </button>
+        </form>
+
+        <div v-if="importId" class="mt-6 space-y-3">
+          <div class="badge badge-neutral">importId: {{ importId }}</div>
+          <div class="badge badge-neutral">queue: {{ queue }}</div>
+
+          <progress class="progress progress-primary w-full" :value="percent" max="100"></progress>
+          <div class="text-sm">{{ processed }} / {{ total }} ({{ percent }}%)</div>
+
+          <div class="alert" v-if="status === 'processing'">
+            <span>Processing...</span>
+          </div>
+
+          <div class="alert alert-success" v-if="status === 'ready'">
+            <span>File is ready to download.</span>
+          </div>
+
+          <div class="alert alert-error" v-if="status === 'failed'">
+            <span>Import failed: {{ errorMessage }}</span>
+          </div>
+
+          <a v-if="status === 'ready'" class="btn btn-success" :href="downloadUrl" target="_blank">
+            Download output
+          </a>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="text-xs text-gray-500">
+          <p>SDK Code Highlight:</p>
+          <pre class="bg-base-300 p-2 rounded mt-2 overflow-x-auto"><code>const { createClient } = require('@superqueues/sdk');
+
+const client = createClient({
+  baseUrl: 'http://localhost:3001',
+  apiKey: 'sqk_...',
+});
+
+// Publish
+await client.publish('my-queue', { data: 'value' });
+
+// Pull + ack
+const msgs = await client.pull('my-queue');
+for (const m of msgs) {
+  await client.ack('my-queue', m.receiptId);
+}</code></pre>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const { createApp, ref, computed } = Vue;
+
+    createApp({
+      setup() {
+        const file = ref(null);
+        const intervalMs = ref(400);
+
+        const importId = ref(null);
+        const queue = ref(null);
+        const status = ref(null);
+
+        const processed = ref(0);
+        const total = ref(0);
+        const errorMessage = ref('');
+        const downloadUrl = ref(null);
+
+        const running = computed(() => status.value === 'processing' || status.value === 'queued');
+        const percent = computed(() => {
+          if (!total.value) return 0;
+          return Math.round((processed.value / total.value) * 100);
+        });
+
+        function onFile(e) {
+          file.value = e.target.files[0] || null;
+        }
+
+        async function startImport() {
+          errorMessage.value = '';
+          downloadUrl.value = null;
+
+          const form = new FormData();
+          form.append('file', file.value);
+          form.append('intervalMs', String(intervalMs.value));
+
+          const res = await fetch('/import', { method: 'POST', body: form });
+          const data = await res.json();
+          if (!res.ok) {
+            errorMessage.value = data.error || 'failed to start import';
+            status.value = 'failed';
+            return;
+          }
+
+          importId.value = data.importId;
+          queue.value = data.queue;
+          status.value = 'processing';
+
+          const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
+          const ws = new WebSocket(`${wsProto}://${location.host}${data.wsUrl}`);
+
+          ws.onmessage = (ev) => {
+            const msg = JSON.parse(ev.data);
+
+            if (msg.type === 'hello') {
+              processed.value = msg.processed || 0;
+              total.value = msg.total || 0;
+              status.value = msg.status;
+              if (msg.downloadUrl) downloadUrl.value = msg.downloadUrl;
+            }
+
+            if (msg.type === 'progress') {
+              processed.value = msg.processed;
+              total.value = msg.total;
+            }
+
+            if (msg.type === 'ready') {
+              status.value = 'ready';
+              downloadUrl.value = msg.downloadUrl;
+              ws.close();
+            }
+
+            if (msg.type === 'error') {
+              status.value = 'failed';
+              errorMessage.value = msg.message;
+              ws.close();
+            }
+          };
+
+          ws.onerror = () => {
+            status.value = 'failed';
+            errorMessage.value = 'WebSocket error';
+          };
+        }
+
+        return {
+          file,
+          intervalMs,
+          importId,
+          queue,
+          status,
+          processed,
+          total,
+          percent,
+          downloadUrl,
+          running,
+          errorMessage,
+          onFile,
+          startImport,
+        };
+      },
+    }).mount('#app');
+  </script>
+</body>
+</html>
