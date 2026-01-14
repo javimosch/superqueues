@@ -172,6 +172,15 @@ Notes:
 - Set `GATEWAY_URL` (or `PORT_GATEWAY`) if your gateway is not on `http://localhost:3000`.
 - This example uses the local SDK via `require('../../sdk')`.
 
+----
+
+<!-- Made by Intrane block -->
+<p><em>Part of the Intrane suite of practical developer tools</em></p>
+<a href="https://intrane.fr" target="_blank">
+  <img src="https://img.shields.io/badge/Intrane-intranefr-blue?style=flat-square" alt="Intrane"/>
+</a>
+
+
 ## License
 
 MIT (see `LICENSE`).
